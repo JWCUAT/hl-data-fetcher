@@ -3,63 +3,68 @@ import time
 from hyperliquid.utils import constants
 from hyperliquid.info import Info
 
-# --- 2026 CONFIG ---
+# --- CONFIG ---
 SYMBOL = "BTC"
 INTERVAL = "5m"
-DAYS = 180 
-FILE_NAME = f"HL_{SYMBOL}_{INTERVAL}_6mo.csv"
+DAYS_TO_FETCH = 180 
+FILE_NAME = f"{SYMBOL}_{INTERVAL}_6_months.csv"
 
-# Initialize Info (Mainnet)
+# Initialize Info API
 info = Info(constants.MAINNET_API_URL, skip_ws=True)
 
-def fetch_data():
-    all_data = []
-    # Current time in ms
-    end_ts = int(time.time() * 1000)
-    # Start time (180 days ago)
-    start_limit = end_ts - (DAYS * 24 * 60 * 60 * 1000)
+def fetch_6_months():
+    end_time = int(time.time() * 1000)
+    # Start of the 6-month window
+    start_limit = end_time - (DAYS_TO_FETCH * 24 * 60 * 60 * 1000)
     
-    print(f"🚀 Initializing 6-month sync for {SYMBOL}...")
+    all_candles = []
+    current_end = end_time
+    
+    print(f"🚀 Starting download for {SYMBOL}...")
 
-    while end_ts > start_limit:
+    while current_end > start_limit:
         try:
-            # UPTODATE: Using 'candles_snapshot' (plural)
-            data = info.candles_snapshot(SYMBOL, INTERVAL, start_limit, end_ts)
+            # FIX: Updated to 'candles_snapshot' (plural)
+            # The API returns max 5000 candles per request
+            candles = info.candles_snapshot(SYMBOL, INTERVAL, start_limit, current_end)
             
-            if not data or len(data) == 0:
+            if not candles or len(candles) == 0:
+                print("🏁 Reached the end of available history.")
                 break
                 
-            all_data.extend(data)
+            all_candles.extend(candles)
             
-            # Move the window back based on the oldest candle received
-            oldest_ts = min(candle['t'] for candle in data)
+            # Find the oldest candle in this batch
+            oldest_ts = min(c['t'] for c in candles)
             
-            # Safety break if no progress is made
-            if oldest_ts >= end_ts:
+            # Safety check: if we didn't move backward, stop to avoid infinite loop
+            if oldest_ts >= current_end:
                 break
                 
-            end_ts = oldest_ts - 1
-            print(f"✅ Progress: {len(all_data)} candles | Current Date: {pd.to_datetime(oldest_ts, unit='ms')}")
+            # Move the window back
+            current_end = oldest_ts - 1
             
-            # 2026 Rate Limit Protection (Slightly longer delay for safety)
-            time.sleep(0.6)
+            print(f"✅ Fetched {len(all_candles)} candles. Back to: {pd.to_datetime(oldest_ts, unit='ms')}")
+            
+            # Rate limit protection (Hyperliquid 2026 weight: 1200/min)
+            time.sleep(0.6) 
             
         except Exception as e:
-            print(f"⚠️ Rate limit or Connection issue: {e}")
-            time.sleep(5) # Cooldown
+            print(f"⚠️ Error: {e}")
+            time.sleep(5) # Cooldown on error
             continue
 
-    # Process and Save
-    if all_data:
-        df = pd.DataFrame(all_data)
+    if all_candles:
+        df = pd.DataFrame(all_candles)
+        # Remove any overlaps and sort chronologically
         df = df.drop_duplicates(subset=['t']).sort_values('t')
         
-        # 2026 Key Mapping
+        # Mapping HL keys (t, o, h, l, c, v) to standard names
         df = df.rename(columns={'t': 'timestamp', 'o': 'open', 'h': 'high', 'l': 'low', 'c': 'close', 'v': 'volume'})
         df = df[['timestamp', 'open', 'high', 'low', 'close', 'volume']]
         
         df.to_csv(FILE_NAME, index=False)
-        print(f"🏁 DONE! Total Rows: {len(df)}. Saved to {FILE_NAME}")
+        print(f"💾 Success! {len(df)} candles saved to {FILE_NAME}")
 
 if __name__ == "__main__":
-    fetch_data()
+    fetch_6_months()
